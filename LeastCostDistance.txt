@@ -1,0 +1,75 @@
+library(leastcostpath)
+library(sf)
+library(terra)
+library(ggplot2)
+library(ggspatial)
+library(tidyterra)
+library(ggrepel)
+library(ggnewscale)
+
+tif_path <- "C:/Users/pc/input.tif"
+kmz_path <- "C:/Users/pc/input.kml"
+pdf_path <- "C:/Users/pc/output.pdf"
+
+
+dem_raw <- rast(tif_path)
+dem_utm <- project(dem_raw, "EPSG:32637")
+
+Raw <- st_read(kmz_path)
+names(Raw)[tolower(names(Raw)) == "name"] <- "Name" 
+Raw_utm <- st_transform(Raw, 32637)
+
+Cave <- st_as_sf(data.frame(x=35.980169, y=36.007205), coords = c("x", "y"), crs = 4326)
+Cave_utm <- st_transform(Cave, 32637)
+
+Raster <- c(st_geometry(Cave_utm), st_geometry(Raw_utm))
+bbox <- st_bbox(Raster)
+dem_cut <- crop(dem_utm, ext(bbox["xmin"]-4000, bbox["xmax"]+4000, bbox["ymin"]-4000, bbox["ymax"]+4000))
+
+cost_surface <- create_slope_cs(dem_cut, cost_function = "tobler")
+lcps <- create_lcp(x = cost_surface, origin = Cave_utm, destination = Raw_utm)
+lcps$length_km <- round(as.numeric(st_length(lcps)) / 1000, 2)
+
+slp <- terrain(dem_cut, "slope", unit="radians")
+asp <- terrain(dem_cut, "aspect", unit="radians")
+hill <- shade(slp, asp, angle = 45, direction = 315)
+
+coords_df <- as.data.frame(st_coordinates(Raw_utm))
+coords_df$Name <- Raw_utm$Name
+coords_df$Dist <- paste0(lcps$length_km, " km")
+coords_df$Label <- paste0(coords_df$Name, "\n", coords_df$Dist)
+
+p <- ggplot() +
+  geom_spatraster(data = hill, show.legend = FALSE) +
+  scale_fill_gradient(low = "grey10", high = "grey90") +
+  
+  new_scale_fill() +
+  
+    geom_spatraster(data = dem_cut, alpha = 0.45) +
+  scale_fill_hypso_c(palette = "dem_poster", name = "Yükseklik (m)") +
+  
+    geom_sf(data = lcps, color = "#d00000", linewidth = 1.2, alpha = 0.8) +
+  
+    geom_sf(data = Cave_utm, color = "blue", shape = 18, size = 6) +
+  geom_sf(data = Raw_utm, color = "black", shape = 21, fill = "white", size = 2.5) +
+  
+  geom_text_repel(data = coords_df, aes(x = X, y = Y, label = Label),
+                  size = 4.5, fontface = "bold", color = "black",
+                  box.padding = 0.8, point.padding = 0.5,
+                  bg.color = "white", bg.r = 0.15, force = 15) +
+  
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  annotation_scale(location = "bl", width_hint = 0.2) +
+  
+   theme_minimal() +
+  labs(title = "Least Cost Path Analysis",
+       subtitle = "Regional Movement Model",
+       caption = "by Rstudio") +
+  theme(plot.title = element_text(face="bold", size=18),
+        panel.grid = element_blank())
+
+
+ggsave(pdf_path, plot = p, width = 12, height = 10, device = "pdf")
+
+print(paste("Don't worries :)", pdf_path))
